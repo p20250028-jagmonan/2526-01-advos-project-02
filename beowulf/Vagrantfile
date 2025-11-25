@@ -1,0 +1,56 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+CLUSTER_NODES = ENV.fetch('NODES', '3').to_i   # change via: NODES=4 vagrant up
+BOX_NAME = 'ubuntu/jammy64'
+
+HEAD_IP = '192.168.56.10'
+BASE_IP_LAST = 11  # node1 = .11, node2 = .12, ...
+
+RAM_MB = 2048
+CPU_CT = 2
+
+Vagrant.configure('2') do |config|
+  config.vm.box = BOX_NAME
+  config.vm.provider :virtualbox do |vb|
+    vb.gui = false
+  end
+
+  # Common synced folder host<->guest (used to pass ssh key pub from head to workers)
+  # Note: Vagrant auto-mounts /vagrant => project dir
+
+  # HEAD NODE
+  config.vm.define 'head' do |head|
+    head.vm.hostname = 'head'
+    head.vm.network 'private_network', ip: HEAD_IP
+    head.vm.provider :virtualbox do |vb|
+      vb.name = 'beowulf-head'
+      vb.memory = RAM_MB
+      vb.cpus = CPU_CT
+    end
+
+    head.vm.provision 'shell', path: 'provision/common.sh', args: ['head', CLUSTER_NODES.to_s]
+    head.vm.provision 'shell', path: 'provision/head.sh',   args: [HEAD_IP, CLUSTER_NODES.to_s]
+  end
+
+  # WORKER NODES
+  (1..CLUSTER_NODES).each do |i|
+    ip_last = BASE_IP_LAST + (i - 1)
+    node_name = "node#{i}"
+    node_ip = "192.168.56.#{ip_last}"
+
+    config.vm.define node_name do |node|
+      node.vm.hostname = node_name
+      node.vm.network 'private_network', ip: node_ip
+      node.vm.provider :virtualbox do |vb|
+        vb.name = "beowulf-#{node_name}"
+        vb.memory = RAM_MB
+        vb.cpus = CPU_CT
+      end
+
+      node.vm.provision 'shell', path: 'provision/common.sh', args: [node_name, CLUSTER_NODES.to_s]
+      node.vm.provision 'shell', path: 'provision/worker.sh', args: [HEAD_IP]
+    end
+  end
+end
+
