@@ -1,0 +1,57 @@
+#!/bin/bash
+# Run as root on worker nodes (worker1 or worker2)
+
+# ===== 1️⃣ Set hostname =====
+read -p "Enter this node's hostname (worker1/worker2): " NODE
+sudo hostnamectl set-hostname "$NODE"
+
+# ===== 2️⃣ Update /etc/hosts =====
+MASTER_IP="10.8.1.79"
+WORKER1_IP="10.8.1.78"
+WORKER2_IP="10.8.1.80"
+
+sudo bash -c "cat > /etc/hosts" <<EOF
+127.0.0.1       localhost
+127.0.1.1       $NODE
+
+::1     ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+
+$MASTER_IP master
+$WORKER1_IP worker1
+$WORKER2_IP worker2
+EOF
+
+# ===== 3️⃣ Install necessary packages =====
+sudo apt update
+sudo apt install -y build-essential openmpi-bin libopenmpi-dev \
+                    nfs-common pdsh openssh-client openssh-server git curl htop
+
+# ===== 4️⃣ Create mpi user with matching UID/GID =====
+# UID=999, GID=998 (matches master)
+if ! id mpi >/dev/null 2>&1; then
+    sudo groupadd -g 998 mpi || true
+    sudo useradd -m -u 999 -g 998 -s /bin/bash mpi || true
+    echo "mpi ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/99-mpi >/dev/null
+    sudo chmod 440 /etc/sudoers.d/99-mpi
+else
+    sudo usermod -g 998 mpi
+    sudo chown -R mpi:mpi /home/mpi
+fi
+
+# ===== 5️⃣ Mount /cluster via NFS =====
+sudo mkdir -p /cluster
+sudo chown mpi:mpi /cluster
+sudo mount master:/cluster /cluster
+
+# Optional: auto-mount at boot
+grep -q "master:/cluster" /etc/fstab || \
+    echo "master:/cluster /cluster nfs defaults 0 0" | sudo tee -a /etc/fstab
+
+# ===== 6️⃣ Setup SSH trust with master =====
+# Assumes you have run ssh-copy-id from master already
+sudo -iu mpi ssh-keyscan -H master >> /home/mpi/.ssh/known_hosts
+
+echo "Worker node '$NODE' setup complete!"
+echo "Verify: sudo -iu mpi ssh master"
