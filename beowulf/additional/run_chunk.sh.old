@@ -1,0 +1,95 @@
+#!/bin/bash
+# run_chunks.sh
+# Controller that:
+#   - splits work into CHUNKS
+#   - before each chunk:
+#       * detects alive nodes (heartbeats + ssh)
+#       * builds hostfile
+#       * sets np = total slots
+#       * runs mpirun for that chunk
+#
+# Usage:
+#   run_chunks.sh <num_chunks> <mpi_program> [program_args...]
+#
+# Example:
+#   run_chunks.sh 4 /cluster/matmul_mpi 600
+
+ALIVE_SCRIPT="/cluster/cluster_alive_nodes.sh"
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <num_chunks> <mpi_program> [program_args...]"
+    exit 1
+fi
+
+NUM_CHUNKS="$1"
+shift
+MPI_PROG="$1"
+shift
+PROG_ARGS=("$@")
+
+if [ "$NUM_CHUNKS" -le 0 ]; then
+    echo "Error: num_chunks must be > 0"
+    exit 1
+fi
+
+if [ ! -x "$MPI_PROG" ]; then
+    echo "Warning: '$MPI_PROG' not executable or not found."
+fi
+
+for CHUNK_ID in $(seq 0 $((NUM_CHUNKS - 1))); do
+    echo "=== Chunk $CHUNK_ID / $((NUM_CHUNKS - 1)) ==="
+
+    # Get alive nodes + slots
+    ALIVE=$($ALIVE_SCRIPT)
+    if [ -z "$ALIVE" ]; then
+        echo "No alive nodes available. Aborting."
+        exit 1
+    fi
+
+    echo "Alive nodes:"
+    echo "$ALIVE"
+
+    # Build hostfile and count slots
+    HOSTFILE=$(mktemp /tmp/mpihosts.XXXXXX)
+    TOTAL_SLOTS=0
+    while read -r host slots; do
+        [ -z "$host" ] && continue
+        echo "$host slots=$slots" >> "$HOSTFILE"
+        TOTAL_SLOTS=$((TOTAL_SLOTS + slots))
+    done <<< "$ALIVE"
+
+    echo "Total slots this chunk: $TOTAL_SLOTS"
+    echo "Hostfile:"
+    cat "$HOSTFILE"
+    echo
+
+    if [ "$TOTAL_SLOTS" -le 0 ]; then
+        echo "No slots available. Aborting."
+        rm -f "$HOSTFILE"
+        exit 1
+    fi
+
+    echo "Running mpirun for chunk $CHUNK_ID..."
+    echo "Command: mpirun -np $TOTAL_SLOTS --hostfile $HOSTFILE $MPI_PROG ${PROG_ARGS[*]} --chunk-id $CHUNK_ID --num-chunks $NUM_CHUNKS"
+    echo
+
+    mpirun -np "$TOTAL_SLOTS" --hostfile "$HOSTFILE" \
+        "$MPI_PROG" "${PROG_ARGS[@]}" \
+        --chunk-id "$CHUNK_ID" --num-chunks "$NUM_CHUNKS"
+
+    STATUS=$?
+    rm -f "$HOSTFILE"
+
+    if [ $STATUS -ne 0 ]; then
+        echo "Chunk $CHUNK_ID failed with status $STATUS."
+        echo "You can choose to retry this chunk, or abort."
+        # For now, abort:
+        exit $STATUS
+    else
+        echo "Chunk $CHUNK_ID completed successfully."
+    fi
+
+    echo
+done
+
+echo "All chunks completed successfully."

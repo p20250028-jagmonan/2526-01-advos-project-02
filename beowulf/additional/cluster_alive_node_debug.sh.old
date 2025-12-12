@@ -1,0 +1,56 @@
+#!/bin/bash
+# cluster_alive_nodes.sh
+# Output: lines "node slots" for nodes considered ALIVE
+# Criteria:
+#   - heartbeat file exists and is recent (<= 15 seconds)
+#   - ssh test passes
+
+NODE_CONF="/cluster/nodes.conf"
+HB_DIR="/cluster/heartbeats"
+HB_TIMEOUT=15   # seconds
+
+if [ ! -f "$NODE_CONF" ]; then
+    echo "Error: $NODE_CONF not found" >&2
+    exit 1
+fi
+
+NOW=$(date +%s)
+
+while read -r host slots; do
+    echo $host $slots
+    # skip comments/empty
+    if [ -z "$host" ]; then
+        echo "[DEBUG] skipping empty line" >&2
+        continue
+    fi
+    if [[ "$host" =~ ^# ]]; then
+        echo "[DEBUG] skipping comment line: $host" >&2
+        continue
+    fi
+
+    echo "[DEBUG] checking host='$host' slots='$slots'" >&2
+
+    HB_FILE="$HB_DIR/$host"
+    if [ ! -f "$HB_FILE" ]; then
+        echo "[DEBUG]  -> no heartbeat file: $HB_FILE" >&2
+        continue
+    fi
+
+    LAST=$(cat "$HB_FILE" 2>/dev/null || echo 0)
+    AGE=$((NOW - LAST))
+    echo "[DEBUG]  -> heartbeat age for $host: $AGE seconds" >&2
+
+    if [ "$AGE" -gt "$HB_TIMEOUT" ]; then
+        echo "[DEBUG]  -> heartbeat too old (> $HB_TIMEOUT s)" >&2
+        continue
+    fi
+
+    ssh -o BatchMode=yes -o ConnectTimeout=1 "$host" "echo ok" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo "[DEBUG]  -> ssh FAILED for $host" >&2
+        continue
+    fi
+
+    echo "[DEBUG]  -> $host is ALIVE, printing '$host $slots'" >&2
+    echo "$host $slots"
+done < "$NODE_CONF"
