@@ -1,0 +1,66 @@
+https://chatgpt.com/share/6926b71f-4cb4-8004-9319-91c00fad2cf3
+
+
+
+
+✅ 4. Try mounting again
+sudo mount -t nfs master:/cluster /cluster
+
+
+or explicitly specify version (sometimes needed):
+
+sudo mount -t nfs -o vers=4 master:/cluster /cluster
+
+
+Or for NFSv3 (older servers):
+
+sudo mount -t nfs -o vers=3 master:/cluster /cluster
+
+✅ 5. Check if the NFS server is exporting properly (run this on master)
+sudo exportfs -v
+
+
+You should see something like:
+
+/cluster  192.168.1.0/24(rw,sync,no_root_squash)
+
+
+If not → the export isn’t set.
+
+✅ 6. Test communication from worker2
+showmount -e master
+
+
+Expected:
+
+Export list for master:
+/cluster  192.168.1.0/24
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Running:
+
+sudo -iu mpi mpirun -np 6 \
+  --hostfile /home/mpi/hostfile \
+  --mca btl_tcp_if_exclude lo,docker0 \
+  /cluster/matmul
